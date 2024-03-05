@@ -17,9 +17,38 @@ PATH TO OpenSfM: ADD ABSOLUTE PATH TO THE INSTALLATION FOLDER OF OpenSfM LIBRARY
 opensfm_path = opensfm_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM'
 
 """
-PATH TO DATASET
+PATH TO THE DATASET
 """
-dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano2'
+dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano3'
+
+"""
+PATH TO THE TRAJECTORY
+"""
+trajectory_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice\Praha21Bechexp_panorama.csv'
+
+
+def prepare_exif_file(trajectory, dataset_path):
+    df = pd.read_csv(trajectory, delimiter=';')
+    print(df)
+    json_data = {}
+
+    for index, row in df.iterrows():
+        panorama_name = row['panorama_file_name'] + '.jpg'
+        latitude = row['latitude[deg]']
+        longitude = row['longitude[deg]']
+        altitude = row['altitude_ellipsoidal[m]']
+        
+        json_data[panorama_name] = {
+            'gps': {
+                'latitude': latitude,
+                'longitude': longitude,
+                'altitude': altitude
+            }
+        }
+
+    # Save JSON to a file
+    with open(os.path.join(dataset_path, 'exif_overrides.json'), 'w') as json_file:
+        json.dump(json_data, json_file, indent=4)
 
 
 def prepare_track_row(pixel_row):
@@ -51,22 +80,25 @@ def get_theta_phi( _x, _y, _z):
 # x,y position in cubemap
 # cw  cube width
 # W,H size of equirectangular image
-def map_cube(x, y, side, cw, W, H):
+def map_cube(x, y, side):
+    cw = 2033
+    W = 8000
+    H = 4000
 
     u = 2*(float(x)/cw - 0.5)
     v = 2*(float(y)/cw - 0.5)
 
-    if side == "front":
+    if side == "0":
         theta, phi = get_theta_phi( 1, u, v )
-    elif side == "right":
+    elif side == "1":
         theta, phi = get_theta_phi( -u, 1, v )
-    elif side == "left":
+    elif side == "3":
         theta, phi = get_theta_phi( u, -1, v )
-    elif side == "back":
+    elif side == "2":
         theta, phi = get_theta_phi( -1, -u, v )
-    elif side == "bottom":
+    elif side == "5":
         theta, phi = get_theta_phi( -v, u, 1 )
-    elif side == "top":
+    elif side == "4":
         theta, phi = get_theta_phi( v, u, -1 )
 
     _u = 0.5+0.5*(theta/math.pi)
@@ -76,6 +108,9 @@ def map_cube(x, y, side, cw, W, H):
 
 if __name__ == '__main__':
     start = time.time()
+
+    if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
+        prepare_exif_file(trajectory_path, dataset_path)
 
     # paths to bat files with opensfm steps
     bat_prepare = os.path.join(opensfm_path, 'bin\opensfm_prepare.bat')
