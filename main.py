@@ -31,6 +31,11 @@ PATH TO THE ximilar folder
 """
 ximilar_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\ximilar_detect'
 
+"""
+PATH TO THE panoramas
+"""
+panos_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice'
+
 
 def prepare_exif_file(trajectory, dataset_path):
     df = pd.read_csv(trajectory, delimiter=';')
@@ -108,7 +113,7 @@ def map_cube(x, y, side):
 
     _u = 0.5+0.5*(theta/math.pi)
     _v = 0.5+(phi/math.pi)
-    return _u*W,  _v*H
+    return int(_u*W),  int(_v*H)
 
 def compute_coords():
     if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
@@ -179,15 +184,15 @@ def ximilar_to_df():
                     json_str = "\n".join(json_lines)
                     json_data = json.loads(json_str)
                     #print(json_data)
+
+                    x, y = map_cube(json_data["points"][0]["point"][0], json_data["points"][0]["point"][1], codes[-2])
                     
                     extracted_info = {
                         "filename": filename[:-4],
-                        "pano_code": int(codes[-3]),
-                        "cube": int(codes[-2]),
-                        "pole": int(codes[-1]),
-                        "x_c": json_data["points"][0]["point"][0],  # Extract x-coordinate from 'pole bottom'
-                        "y_c": json_data["points"][0]["point"][1],  # Extract y-coordinate from 'pole bottom'
-                        "traffic_sign": [sign["traffic sign code"] for sign in json_data["traffic signs"]]  # Extract traffic sign codes
+                        "pano_file": codes[-3],
+                        "x": x,  # Extract x-coordinate from 'pole bottom'
+                        "y": y,  # Extract y-coordinate from 'pole bottom'
+                        "traffic_sign": ', '.join([sign["traffic sign code"] for sign in json_data["traffic signs"]])  # Extract traffic sign codes
                     }
                     data.append(extracted_info)
                     
@@ -196,16 +201,25 @@ def ximilar_to_df():
 
     # Create a DataFrame from the extracted data
     df = pd.DataFrame(data)
+    
+    # Edit the dataframe
+    pano_files = os.listdir(panos_path)
+    print(pano_files)
+    filename_dict = {file_name[-7:-4]: file_name for file_name in pano_files}
+    df['pano_file'] = df['pano_file'].map(filename_dict.get)
+    #df.drop('pano_code', axis=1)
 
-    # Display the DataFrame
+    print(df)
+
+
     return df
 
 
 def remove_comments(line):
     return line.split("//")[0].strip('\n')
 
-def add_panofile(df):
-    pass
+def find_pois(df):
+    # 
 
 def main():
     df = ximilar_to_df()
