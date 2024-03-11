@@ -26,6 +26,11 @@ PATH TO THE TRAJECTORY
 """
 trajectory_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice\Praha21Bechexp_panorama.csv'
 
+"""
+PATH TO THE ximilar folder
+"""
+ximilar_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\ximilar_detect'
+
 
 def prepare_exif_file(trajectory, dataset_path):
     df = pd.read_csv(trajectory, delimiter=';')
@@ -105,10 +110,7 @@ def map_cube(x, y, side):
     _v = 0.5+(phi/math.pi)
     return _u*W,  _v*H
 
-
-if __name__ == '__main__':
-    start = time.time()
-
+def compute_coords():
     if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
         prepare_exif_file(trajectory_path, dataset_path)
 
@@ -151,6 +153,68 @@ if __name__ == '__main__':
     print(tsign_coords)
 
     reconstruction.close()
+
+
+def ximilar_to_df():
+    """
+    Converting info from ximilar txts into df
+    """
+    # List to store extracted data
+    data = []
+
+    # Iterate over each file in the folder
+    for filename in os.listdir(ximilar_path):
+        if filename.endswith(".txt"):
+            file_path = os.path.join(ximilar_path, filename)
+            codes = filename[:-4].split('_')
+            with open(file_path, "r") as file:
+                #s = file.read()
+                #print(s)
+                #s = s.replace("\'", "\"")
+                #print(file)
+                #print(file.readlines())
+                try:
+                    json_lines = [remove_comments(line) for line in file.readlines()]
+                    #print(json_lines)
+                    json_str = "\n".join(json_lines)
+                    json_data = json.loads(json_str)
+                    #print(json_data)
+                    
+                    extracted_info = {
+                        "filename": filename[:-4],
+                        "pano_code": int(codes[-3]),
+                        "cube": int(codes[-2]),
+                        "pole": int(codes[-1]),
+                        "x_c": json_data["points"][0]["point"][0],  # Extract x-coordinate from 'pole bottom'
+                        "y_c": json_data["points"][0]["point"][1],  # Extract y-coordinate from 'pole bottom'
+                        "traffic_sign": [sign["traffic sign code"] for sign in json_data["traffic signs"]]  # Extract traffic sign codes
+                    }
+                    data.append(extracted_info)
+                    
+                except Exception as e:
+                    print(f"Error processing file {file_path}: {e}")
+
+    # Create a DataFrame from the extracted data
+    df = pd.DataFrame(data)
+
+    # Display the DataFrame
+    return df
+
+
+def remove_comments(line):
+    return line.split("//")[0].strip('\n')
+
+def add_panofile(df):
+    pass
+
+def main():
+    df = ximilar_to_df()
+    
+
+if __name__ == '__main__':
+    start = time.time()
+
+    ximilar_to_df()
 
     end = time.time()
     runtime = end - start
