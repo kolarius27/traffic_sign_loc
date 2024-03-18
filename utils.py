@@ -24,6 +24,7 @@ def create_json(x, y, list_sign):
     print(type(list_sign))
     list_sign_json = []
     for sign in list_sign:
+        print(sign)
         list_sign_json.append({
                         "name": "traffic sign",
                         "bound_box": [
@@ -33,7 +34,7 @@ def create_json(x, y, list_sign):
                             336
                         ],
                         "prob": 0.9431861639022827,
-                        "traffic sign code": sign
+                        "traffic sign code": sign.strip('\n[]')
                     })
         
     json_data = {
@@ -84,15 +85,14 @@ def create_ximilar(test_data, ximilar_folder):
         i=0
         f_readlines = f.readlines().copy()
         reference_name = f_readlines[0].split(', ')[0]
-        print(reference_name)
         for line in f_readlines:
-            print(line)
+            # print(line)
             split_line = line.split(', ')
             if split_line[0] == reference_name:
                 i+=1
             else:
                 i=1
-            json_data = create_json(split_line[1], split_line[2], split_line[3].strip('\n').strip('][').split(', '))
+            json_data = create_json(split_line[1], split_line[2], split_line[3:])
             json_path = os.path.join(ximilar_folder, split_line[0].replace('.jpg', '_{}.txt'.format(i)))
 
             print(json_path)
