@@ -1,8 +1,41 @@
 from shapely.geometry import Point, LineString
 import math as m
 import numpy as np
+import pandas as pd
+import os
+import shutil
+import glob
+
+def list_files(path, extension):
+    return glob.glob(os.path.join(path, '*{}'.format(extension)))
+
+def clean_folder(folder):
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 
+def prepare_track_row(pixel_row):
+    name = pixel_row['panorama_file_name'] + '.jpg'
+    x = pixel_row['x']
+    y = pixel_row['y']
+    x_norm = (x + 0.5 - 8000. / 2.0) / 8000
+    y_norm = (y + 0.5 - 4000. / 2.0) / 8000
+    pt_2D = [name, 99999, -1, x_norm, y_norm, -1, 1, 1, 1, -1, -1]
+
+    return pt_2D
+
+
+def append_track_row(row, tracks):
+    print(tracks.columns)
+    a_series = pd.Series(row, index=tracks.columns)
+    tracks.append(a_series, ignore_index=True)
 
 def remove_comments(line):
     return line.split("//")[0].strip('\n')

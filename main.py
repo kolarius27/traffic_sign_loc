@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import subprocess
-import os
-import pandas as pd
+
 import numpy as np
 import json
 import time
@@ -21,12 +20,13 @@ from utils import *
 """
 PATH TO OpenSfM: ADD ABSOLUTE PATH TO THE INSTALLATION FOLDER OF OpenSfM LIBRARY.
 """
-opensfm_path = opensfm_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM'
+opensfm_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM'
 
 """
 PATH TO THE DATASET
 """
-dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano3'
+dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano4'
+clean_folder(dataset_path)
 
 """
 PATH TO THE TRAJECTORY
@@ -47,7 +47,7 @@ panos_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama
 
 def prepare_exif_file(trajectory, dataset_path):
     df = pd.read_csv(trajectory, delimiter=';')
-    print(df)
+    #print(df)
     json_data = {}
 
     for index, row in df.iterrows():
@@ -61,33 +61,38 @@ def prepare_exif_file(trajectory, dataset_path):
                 'latitude': latitude,
                 'longitude': longitude,
                 'altitude': altitude
-            }
+            },
+            'projection_type': 'equirectangular',
+            'width': 8000,
+            'height': 4000,
+            'camera': 'v2 point grey research ladybug 8000 4000 equirectangular 0.0'
         }
 
     # Save JSON to a file
     with open(os.path.join(dataset_path, 'exif_overrides.json'), 'w') as json_file:
         json.dump(json_data, json_file, indent=4)
 
+def add_images(pois, buffer):
+    images_folder = os.path.join(dataset_path, 'images')
+    if not os.path.exists(images_folder):
+        os.mkdir(images_folder)
 
-def prepare_track_row(pixel_row):
-    name = pixel_row['pano_ID'] + '.jpg'
-    x = pixel_row['x']
-    y = pixel_row['y']
-    x_norm = (x + 0.5 - 8000. / 2.0) / 8000
-    y_norm = (y + 0.5 - 4000. / 2.0) / 8000
-    pt_2D = [name, 99999, -1, x_norm, y_norm, -1, 1, 1, 1, -1, -1]
+    images = np.array([os.path.join(panos_path, file + '.jpg') for file in pois['panorama_file_name']])
+    #print(images)
 
-    return pt_2D
-
-
-def append_track_row(row, tracks):
-    print(tracks.columns)
-    a_series = pd.Series(row, index=tracks.columns)
-    tracks.append(a_series, ignore_index=True)
+    pano_files = np.array(list_files(panos_path, '.jpg'))
+    #print(pano_files)
+    idx = np.where(np.isin(pano_files, images))[0]
+    
+    min_img_code = min(idx)
+    max_img_code = max(idx)
+    for id in range(min_img_code - buffer, max_img_code + buffer + 1, 1):
+        file_path = pano_files[id]
+        shutil.copyfile(file_path, os.path.join(images_folder, os.path.split(file_path)[-1]))
 
 
-
-def compute_coords():
+def compute_coords(pois, tsign_df):
+    
     if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
         prepare_exif_file(trajectory_path, dataset_path)
 
@@ -98,11 +103,6 @@ def compute_coords():
     # prepare list of images
     img_path = os.path.join(dataset_path, 'images')
     img_files = [f for f in os.listdir(img_path) if isfile(join(img_path, f))]
-
-    # load image coords of traffic sign
-    pixel_coords_path = os.path.join(dataset_path, 'test_pano.csv')
-    pixel_coords = pd.read_csv(pixel_coords_path, delimiter=';')
-    pixel_coords.apply(pd.to_numeric, errors='coerce').fillna(pixel_coords)
     
     # run preparation of tracks
     subprocess.run([bat_prepare, dataset_path])
@@ -112,9 +112,8 @@ def compute_coords():
     tracks_path = os.path.join(dataset_path, 'tracks.csv')
     with open(tracks_path, 'a', newline='') as csvfile:
         tracks = csv.writer(csvfile, delimiter='\t')
-        for i in range(len(pixel_coords)):
-            p_row = pixel_coords.iloc[i]
-            track_row = prepare_track_row(p_row)
+        for _, row in pois.iterrows():
+            track_row = prepare_track_row(row)
             tracks.writerow(track_row)
 
     # run reconstruction process
@@ -122,14 +121,14 @@ def compute_coords():
 
     # load reconstruction file with geo-coordinates
     reconstruction_path = os.path.join(dataset_path, 'reconstruction.geocoords.json')
-    reconstruction = open(reconstruction_path)
-    reconstruction_json = json.loads(reconstruction.read())
+    with open(reconstruction_path, 'r') as reconstruction:
+        reconstruction_json = json.loads(reconstruction.read())
 
-    # search for geo-coordinate of the traffic sign
-    tsign_coords = reconstruction_json[0]['points']['99999']['coordinates']
-    print(tsign_coords)
-
-    reconstruction.close()
+        # search for geo-coordinate of the traffic sign
+        tsign_coords = reconstruction_json[0]['points']['99999']['coordinates']
+        print(tsign_coords)
+    clean_folder(dataset_path)
+    return tsign_coords
 
 
 def ximilar_to_df():
@@ -189,32 +188,52 @@ def ximilar_to_df():
 
 def find_pois(df):
     # 
+    tsign_df = pd.DataFrame(columns = ['kod', 'pois', 'geometry'])
+
     merged_df = pd.merge(df, trajectory_df, on='panorama_file_name', how='inner')
+    merged_df.drop(columns=['filename', 'gps_seconds[s]'], inplace=True)
     geometry = [Point(xy) for xy in zip(merged_df['longitude[deg]'], merged_df['latitude[deg]'])] 
     gdf = gpd.GeoDataFrame(merged_df, geometry=geometry, crs=4326)
     grouped_gdf = gdf.groupby('traffic_sign')
     for sign, group in grouped_gdf:
-        print(sign)
+        #print(sign)
         cluster_dbscan(group)
+        add_directions(group)
         get_intersection(group)
-        plot_situation(sign, group)
+        #plot_situation(sign, group)
+        group.drop(columns=['latitude[deg]', 'longitude[deg]', 'altitude_ellipsoidal[m]', 'geometry'], inplace=True)
+        pois_gdf = group.groupby('labels')
+        for id, pois in pois_gdf:
+            if id != -1:
+                print(sign, id)
+                print(pois)
+                add_images(pois, 2)
+                tsign_coords = compute_coords(pois, tsign_df)
+                tsign_df.loc[len(tsign_df.index)] = [sign, '{}_{}'.format(sign, id), Point(tsign_coords)]
+                print(tsign_df)
+
         
 
 def cluster_dbscan(group):
     coords = np.vstack(zip(group['latitude[deg]'], group['longitude[deg]']))
     # print(coords)
-    clusterer = DBSCAN(eps=0.0005).fit(coords)
+    clusterer = DBSCAN(eps=0.1/6371., min_samples = 2, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
     group['labels'] = clusterer.labels_
+
+
+def add_directions(group):
     gdf_copy = group.copy()
     lon_2 = []
     lat_2 = []
-    for i, row in gdf_copy.iterrows():
+    for _, row in gdf_copy.iterrows():
         #print(i)
         arr = rectification(row)
         lon_2.append(row['longitude[deg]'] + arr[0]/1000)
         lat_2.append(row['latitude[deg]'] + arr[1]/1000)
     group['lon_2'] = lon_2
     group['lat_2'] = lat_2
+
+    group.drop(columns=['roll[deg]', 'pitch[deg]', 'heading[deg]'], inplace=True)
 
 
     #g = sns.scatterplot(x='longitude[deg]', y='latitude[deg]', hue='labels', data=group)
@@ -226,7 +245,7 @@ def get_intersection(group_gdf):
     cluster_gdf = group_gdf.groupby('labels')
     cluster_list = []
     for sign, cluster in cluster_gdf:
-        print(sign)        
+        #print(sign)        
         idxs = cluster.index.tolist()
         intersections = []
         for i in range(len(idxs) - 1):
@@ -242,15 +261,16 @@ def get_intersection(group_gdf):
             intersections.append(intersection)
 
         inter_arr = np.array(intersections)
-        print(inter_arr)
+        # print(inter_arr)
         cluster_list.extend(cluster_by_intersection(idxs, inter_arr))
-    print(cluster_list)
+    #print(cluster_list)
     cluster_ids = get_cluster_ids(cluster_list)
-    print(cluster_ids)
-    print(group_gdf['labels'])
+    #print(cluster_ids)
+    #print(group_gdf['labels'])
     group_gdf['labels'] = cluster_ids
-    group_gdf.sort('index')
-    print(group_gdf['labels'])
+    #print(group_gdf['labels'])
+
+    group_gdf.drop(columns=['lon_2', 'lat_2'], inplace=True)
                                
 
 
@@ -281,10 +301,19 @@ def plot_situation(sign, group):
     plt.axis('equal')
     cx.add_basemap(ax, crs=group.crs)
     plt.title('{}, {}'.format(sign, np.unique(group['labels'])))
+    
+
+
+def test():
+    prepare_exif_file(trajectory_path, dataset_path)
+    find_pois()
+
 
 def main():
+    prepare_exif_file(trajectory_path, dataset_path)
     df = ximilar_to_df()
     find_pois(df)
+
     
 
 if __name__ == '__main__':
