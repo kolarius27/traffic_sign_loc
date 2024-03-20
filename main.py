@@ -9,14 +9,14 @@ import json
 import time
 from os.path import join, isfile
 import csv
-import math
 from sklearn.cluster import MeanShift,DBSCAN
 import matplotlib.pyplot as plt
 import seaborn as sns
-from shapely.geometry import Point
+
 import geopandas as gpd
 import contextily as cx
-import math as m
+
+from utils import *
 
 """
 PATH TO OpenSfM: ADD ABSOLUTE PATH TO THE INSTALLATION FOLDER OF OpenSfM LIBRARY.
@@ -85,43 +85,7 @@ def append_track_row(row, tracks):
     a_series = pd.Series(row, index=tracks.columns)
     tracks.append(a_series, ignore_index=True)
 
-def get_theta_phi( _x, _y, _z):
-    dv = math.sqrt(_x*_x + _y*_y + _z*_z)
-    x = _x/dv
-    y = _y/dv
-    z = _z/dv
-    theta = math.atan2(y, x)
-    phi = math.asin(z)
-    return theta, phi
 
-
-# x,y position in cubemap
-# cw  cube width
-# W,H size of equirectangular image
-def map_cube(x, y, side):
-    cw = 2033
-    W = 8000
-    H = 4000
-
-    u = 2*(float(x)/cw - 0.5)
-    v = 2*(float(y)/cw - 0.5)
-
-    if side == "0":
-        theta, phi = get_theta_phi( 1, u, v )
-    elif side == "1":
-        theta, phi = get_theta_phi( -u, 1, v )
-    elif side == "3":
-        theta, phi = get_theta_phi( u, -1, v )
-    elif side == "2":
-        theta, phi = get_theta_phi( -1, -u, v )
-    elif side == "5":
-        theta, phi = get_theta_phi( -v, u, 1 )
-    elif side == "4":
-        theta, phi = get_theta_phi( v, u, -1 )
-
-    _u = 0.5+0.5*(theta/math.pi)
-    _v = 0.5+(phi/math.pi)
-    return int(_u*W),  int(_v*H)
 
 def compute_coords():
     if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
@@ -223,109 +187,100 @@ def ximilar_to_df():
     return df
 
 
-def remove_comments(line):
-    return line.split("//")[0].strip('\n')
-
-
-
 def find_pois(df):
     # 
     merged_df = pd.merge(df, trajectory_df, on='panorama_file_name', how='inner')
-    grouped_df = merged_df.groupby('traffic_sign')
-    for sign, group in grouped_df:
-        cluster_meanshift(sign, group)
+    geometry = [Point(xy) for xy in zip(merged_df['longitude[deg]'], merged_df['latitude[deg]'])] 
+    gdf = gpd.GeoDataFrame(merged_df, geometry=geometry, crs=4326)
+    grouped_gdf = gdf.groupby('traffic_sign')
+    for sign, group in grouped_gdf:
+        print(sign)
+        cluster_dbscan(group)
+        get_intersection(group)
+        plot_situation(sign, group)
         
 
-def cluster_meanshift(sign, group):
+def cluster_dbscan(group):
     coords = np.vstack(zip(group['latitude[deg]'], group['longitude[deg]']))
-    geometry = [Point(xy) for xy in zip(group['longitude[deg]'], group['latitude[deg]'])] 
-    gdf = gpd.GeoDataFrame(group, geometry=geometry, crs=4326)
     # print(coords)
     clusterer = DBSCAN(eps=0.0005).fit(coords)
-    gdf['labels'] = clusterer.labels_
-    # calculate_angle(gdf)
-    # (gdf['angle'])
-    ax = gdf.plot(column='labels', figsize=(10,10), colormap='viridis')
-    for row in zip(gdf['longitude[deg]'], gdf['latitude[deg]'], gdf['angle']):
-        plt.axline(row[:2], slope=np.tan(row[2]))
-    plt.axis('equal')
-    cx.add_basemap(ax, crs=gdf.crs)
-    plt.title('{}, {}'.format(sign, np.unique(gdf['labels'])))
+    group['labels'] = clusterer.labels_
+    gdf_copy = group.copy()
+    lon_2 = []
+    lat_2 = []
+    for i, row in gdf_copy.iterrows():
+        #print(i)
+        arr = rectification(row)
+        lon_2.append(row['longitude[deg]'] + arr[0]/1000)
+        lat_2.append(row['latitude[deg]'] + arr[1]/1000)
+    group['lon_2'] = lon_2
+    group['lat_2'] = lat_2
+
 
     #g = sns.scatterplot(x='longitude[deg]', y='latitude[deg]', hue='labels', data=group)
     #plt.show()
 
-def calculate_angle(gdf):
-    car_o = np.deg2rad(gdf['heading[deg]'] + 180)
-    pix_o = np.deg2rad(gdf['x'] / 8000 * 360)
-    gdf['angle'] = (car_o + pix_o) % (2*m.pi)
+
+def get_intersection(group_gdf):
+    #print(group_gdf)
+    cluster_gdf = group_gdf.groupby('labels')
+    cluster_list = []
+    for sign, cluster in cluster_gdf:
+        print(sign)        
+        idxs = cluster.index.tolist()
+        intersections = []
+        for i in range(len(idxs) - 1):
+            id1 = idxs[i]
+            id2 = idxs[i+1]
+            row1 = cluster.loc[id1]
+            row2 = cluster.loc[id2]
+            line1 = create_linestring(row1)
+            line2 = create_linestring(row2)
+            intersection = line1.intersects(line2)
+            if row1['panorama_file_name'] == row2['panorama_file_name']:
+                intersection = False
+            intersections.append(intersection)
+
+        inter_arr = np.array(intersections)
+        print(inter_arr)
+        cluster_list.extend(cluster_by_intersection(idxs, inter_arr))
+    print(cluster_list)
+    cluster_ids = get_cluster_ids(cluster_list)
+    print(cluster_ids)
+    print(group_gdf['labels'])
+    group_gdf['labels'] = cluster_ids
+    group_gdf.sort('index')
+    print(group_gdf['labels'])
+                               
 
 
-def rotation_matrix(omega, phi, kappa):
-    R_x = np.array([[1, 0, 0],
-                    [0, m.cos(omega), m.sin(omega)],
-                    [0, -m.sin(omega), m.cos(omega)]
-                    ])
-
-    R_y = np.array([[m.cos(phi), 0, -m.sin(phi)],
-                    [0, 1, 0],
-                    [m.sin(phi), 0, m.cos(phi)]
-                    ])
-
-    R_z = np.array([[m.cos(kappa), -m.sin(kappa), 0],
-                    [m.sin(kappa), m.cos(kappa), 0],
-                    [0, 0, 1]
-                    ])
-
-    R = R_z @ R_y @ R_x
-    return R
 
 
-def polar2world(lat, lon):
-    x = -m.sin(lat) * m.cos(lon)
-    y = -m.sin(lat) * m.sin(lon)
-    z = m.cos(lat)
-    return np.array([x, y, z])
+def cluster_by_intersection(idxs, intersections):
+    split_indices = np.where(~intersections)[0] +1
+    return np.split(idxs, split_indices)
+    
+
+def get_cluster_ids(cluster_list):
+    cluster_ids = []
+    valid_clusters = 0
+    for cluster in cluster_list:
+        if len(cluster) > 1:
+            cluster_ids.extend([valid_clusters] * len(cluster))
+            valid_clusters += 1
+        else:
+            cluster_ids.append(-1)
+    return np.array(cluster_ids)
 
 
-def polar2world_(lat, lon):
-    y = m.sin(lat) * m.cos(lon)
-    x = m.sin(lat) * m.sin(lon)
-    z = m.cos(lat)
-    return np.array([x, y, z])
-
-
-def world2polar(arr):
-    lat = m.acos(arr[2])
-    lon = m.atan2(arr[1], arr[0])
-    #lat = pi/2 - lat
-    return lat, lon
-
-
-def rectification(row):
-
-    lam = m.radians(row['x'] / 8000 * 360.0)
-    phi = m.radians(row['y'] / 4000 * 180.0)
-
-    # rotation angles of panoramic images
-    roll = m.radians(row['roll[deg]'])
-    pitch = m.radians(row['pitch[deg]'])
-    yaw = m.radians(row['heading[deg]'])
-    #roll = 0.0
-    #pitch = 0.0
-
-    arr = polar2world(phi, lam)
-
-    rotation = rotation_matrix(roll, pitch, yaw)
-
-    arr_rec = rotation @ np.transpose(arr)
-
-    phi2, lam2 = world2polar(arr_rec)
-
-    arr_final = polar2world_(phi2, lam2)
-
-    return arr_final
-
+def plot_situation(sign, group):
+    ax = group.plot(column='labels', figsize=(10,10), colormap='viridis')
+    for row in zip(group['longitude[deg]'], group['latitude[deg]'], group['lon_2'], group['lat_2']):
+        # plt.axline(row[:2], slope=np.tan(row[4]), c='blue')
+        plt.axline(row[:2], row[2:4], c='red')
+    plt.axis('equal')
+    cx.add_basemap(ax, crs=group.crs)
+    plt.title('{}, {}'.format(sign, np.unique(group['labels'])))
 
 def main():
     df = ximilar_to_df()
