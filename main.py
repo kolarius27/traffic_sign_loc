@@ -172,7 +172,7 @@ def ximilar_to_df(ximilar_path, panos_path):
 
     filename_dict = {file_name[-7:-4]: file_name[:-4] for file_name in pano_files}
     df['panorama_file_name'] = df['panorama_file_name'].map(filename_dict.get)
-        
+
     return df
 
 
@@ -295,7 +295,7 @@ def plot_situation(sign, group):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Aplikace na výpočet geolokace z panoramatických snímků')
+    parser = argparse.ArgumentParser(prog='PanoLoc', description='Aplikace na výpočet geolokace z panoramatických snímků')
     parser.add_argument('ximilar', help='Cesta ke složce, kde jsou uložené txt soubory od Ximilaru')
     parser.add_argument('trajektorie', help='Cesta k csv souboru s trajektorií snímání')
     parser.add_argument('fotky', help='Cesta ke složce s panoramatickými snímky')
