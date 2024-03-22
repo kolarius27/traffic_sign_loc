@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import subprocess
-
+import argparse
 import numpy as np
 import json
 import time
@@ -17,33 +17,34 @@ import contextily as cx
 
 from utils import *
 
-"""
-PATH TO OpenSfM: ADD ABSOLUTE PATH TO THE INSTALLATION FOLDER OF OpenSfM LIBRARY.
-"""
+
+
+#PATH TO OpenSfM: ADD ABSOLUTE PATH TO THE INSTALLATION FOLDER OF OpenSfM LIBRARY.
+
 opensfm_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM'
 
-"""
-PATH TO THE DATASET
-"""
+
+#PATH TO THE DATASET
+
 dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano4'
 clean_folder(dataset_path)
 
 """
-PATH TO THE TRAJECTORY
-"""
+#PATH TO THE TRAJECTORY
+
 trajectory_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice\Praha21Bechexp_panorama.csv'
 trajectory_df = pd.read_csv(trajectory_path, sep=';')
 
-"""
-PATH TO THE ximilar folder
-"""
+
+#PATH TO THE ximilar folder
+
 ximilar_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\ximilar_detect'
 
-"""
-PATH TO THE panoramas
-"""
-panos_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice'
 
+#PATH TO THE panoramas
+
+panos_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice'
+"""
 
 def prepare_exif_file(trajectory, dataset_path):
     df = pd.read_csv(trajectory, delimiter=';')
@@ -72,7 +73,7 @@ def prepare_exif_file(trajectory, dataset_path):
     with open(os.path.join(dataset_path, 'exif_overrides.json'), 'w') as json_file:
         json.dump(json_data, json_file, indent=4)
 
-def add_images(pois, buffer):
+def add_images(pois, panos_path, buffer):
     images_folder = os.path.join(dataset_path, 'images')
     if not os.path.exists(images_folder):
         os.mkdir(images_folder)
@@ -91,7 +92,7 @@ def add_images(pois, buffer):
         shutil.copyfile(file_path, os.path.join(images_folder, os.path.split(file_path)[-1]))
 
 
-def compute_coords(pois, tsign_df):
+def compute_coords(pois, trajectory_path):
     
     if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
         prepare_exif_file(trajectory_path, dataset_path)
@@ -131,7 +132,7 @@ def compute_coords(pois, tsign_df):
     return tsign_coords
 
 
-def ximilar_to_df():
+def ximilar_to_df(ximilar_path, panos_path):
     """
     Converting info from ximilar txts into df
     """
@@ -144,21 +145,13 @@ def ximilar_to_df():
             file_path = os.path.join(ximilar_path, filename)
             codes = filename[:-4].split('_')
             with open(file_path, "r") as file:
-                #s = file.read()
-                #print(s)
-                #s = s.replace("\'", "\"")
-                #print(file)
-                #print(file.readlines())
                 try:
                     json_lines = [remove_comments(line) for line in file.readlines()]
-                    #print(json_lines)
                     json_str = "\n".join(json_lines)
                     json_data = json.loads(json_str)
-                    #print(json_data)
 
                     x, y = map_cube(json_data["points"][0]["point"][0], json_data["points"][0]["point"][1], codes[-2])
-                    #print(json_data["traffic signs"])
-                    #print([sign["traffic sign code"] for sign in json_data["traffic signs"]])
+
                     extracted_info = {
                         "filename": filename[:-4],
                         "panorama_file_name": codes[-3],
@@ -176,21 +169,18 @@ def ximilar_to_df():
     
     # Edit the dataframe
     pano_files = os.listdir(panos_path)
-    # print(pano_files)
+
     filename_dict = {file_name[-7:-4]: file_name[:-4] for file_name in pano_files}
     df['panorama_file_name'] = df['panorama_file_name'].map(filename_dict.get)
-    #df.drop('pano_code', axis=1)
-
-    #print(df)
-    
+        
     return df
 
 
-def find_pois(df):
+def find_pois(trajectory_df, ximilar_df, panos_path):
     # 
     tsign_df = pd.DataFrame(columns = ['kod', 'pois', 'geometry'])
 
-    merged_df = pd.merge(df, trajectory_df, on='panorama_file_name', how='inner')
+    merged_df = pd.merge(ximilar_df, trajectory_df, on='panorama_file_name', how='inner')
     merged_df.drop(columns=['filename', 'gps_seconds[s]'], inplace=True)
     geometry = [Point(xy) for xy in zip(merged_df['longitude[deg]'], merged_df['latitude[deg]'])] 
     gdf = gpd.GeoDataFrame(merged_df, geometry=geometry, crs=4326)
@@ -207,7 +197,7 @@ def find_pois(df):
             if id != -1:
                 print(sign, id)
                 print(pois)
-                add_images(pois, 2)
+                add_images(pois, panos_path, 0)
                 tsign_coords = compute_coords(pois, tsign_df)
                 tsign_df.loc[len(tsign_df.index)] = [sign, '{}_{}'.format(sign, id), Point(tsign_coords)]
                 print(tsign_df)
@@ -304,15 +294,14 @@ def plot_situation(sign, group):
     
 
 
-def test():
-    prepare_exif_file(trajectory_path, dataset_path)
-    find_pois()
-
-
 def main():
-    prepare_exif_file(trajectory_path, dataset_path)
-    df = ximilar_to_df()
-    find_pois(df)
+    parser = argparse.ArgumentParser(description='Aplikace na výpočet geolokace z panoramatických snímků')
+    parser.add_argument('ximilar', help='Cesta ke složce, kde jsou uložené txt soubory od Ximilaru')
+    parser.add_argument('trajektorie', help='Cesta k csv souboru s trajektorií snímání')
+    parser.add_argument('fotky', help='Cesta ke složce s panoramatickými snímky')
+    args = parser.parse_args()
+    df = ximilar_to_df(args.ximilar, args.fotky)
+    find_pois(df, args.trajektorie)
 
     
 
