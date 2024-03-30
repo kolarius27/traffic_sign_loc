@@ -8,10 +8,8 @@ import json
 import time
 from os.path import join, isfile
 import csv
-from sklearn.cluster import MeanShift,DBSCAN
+from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
-import seaborn as sns
-
 import geopandas as gpd
 import contextily as cx
 
@@ -29,29 +27,12 @@ opensfm_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM'
 dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano4'
 clean_folder(dataset_path)
 
-"""
-#PATH TO THE TRAJECTORY
 
-trajectory_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice\Praha21Bechexp_panorama.csv'
-trajectory_df = pd.read_csv(trajectory_path, sep=';')
-
-
-#PATH TO THE ximilar folder
-
-ximilar_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\ximilar_detect'
-
-
-#PATH TO THE panoramas
-
-panos_path = r'C:\Users\micha\Desktop\Gekon\znacky\ukázka dat\original_panorama_Bechovice'
-"""
-
-def prepare_exif_file(trajectory, dataset_path):
-    df = pd.read_csv(trajectory, delimiter=';')
+def prepare_exif_file(trajectory_df, dataset_path):
     #print(df)
     json_data = {}
 
-    for index, row in df.iterrows():
+    for index, row in trajectory_df.iterrows():
         panorama_name = row['panorama_file_name'] + '.jpg'
         latitude = row['latitude[deg]']
         longitude = row['longitude[deg]']
@@ -73,6 +54,7 @@ def prepare_exif_file(trajectory, dataset_path):
     with open(os.path.join(dataset_path, 'exif_overrides.json'), 'w') as json_file:
         json.dump(json_data, json_file, indent=4)
 
+
 def add_images(pois, panos_path, buffer):
     images_folder = os.path.join(dataset_path, 'images')
     if not os.path.exists(images_folder):
@@ -85,17 +67,33 @@ def add_images(pois, panos_path, buffer):
     #print(pano_files)
     idx = np.where(np.isin(pano_files, images))[0]
     
-    min_img_code = min(idx)
-    max_img_code = max(idx)
-    for id in range(min_img_code - buffer, max_img_code + buffer + 1, 1):
+    id_range = get_image_range(idx, buffer, len(pano_files))
+    print(id_range)
+
+    for id in id_range:
         file_path = pano_files[id]
         shutil.copyfile(file_path, os.path.join(images_folder, os.path.split(file_path)[-1]))
 
 
-def compute_coords(pois, trajectory_path):
+def get_image_range(idx, buffer, list_len):
+    min_img_code = min(idx)
+    max_img_code = max(idx)
+    if min_img_code >= buffer:
+        if (list_len - max_img_code) >= buffer:
+            return range(min_img_code - buffer, max_img_code + buffer + 1, 1)
+        elif (list_len - max_img_code) < buffer:
+            return range(min_img_code - buffer, max_img_code + 1, 1)
+    elif min_img_code < buffer:
+        if (list_len - max_img_code) >= buffer:
+            return range(min_img_code, max_img_code + buffer + 1, 1)
+        elif (list_len - max_img_code) < buffer:
+            return range(min_img_code, max_img_code + 1, 1)
+
+
+def compute_coords(pois, trajectory_df):
     
     if os.path.exists(os.path.join(dataset_path, 'exif_overrides.json')) is False:
-        prepare_exif_file(trajectory_path, dataset_path)
+        prepare_exif_file(trajectory_df, dataset_path)
 
     # paths to bat files with opensfm steps
     bat_prepare = os.path.join(opensfm_path, 'bin\opensfm_prepare.bat')
@@ -176,7 +174,7 @@ def ximilar_to_df(ximilar_path, panos_path):
     return df
 
 
-def find_pois(trajectory_df, ximilar_df, panos_path):
+def find_pois(ximilar_df, trajectory_df, panos_path):
     # 
     tsign_df = pd.DataFrame(columns = ['kod', 'pois', 'geometry'])
 
@@ -197,12 +195,24 @@ def find_pois(trajectory_df, ximilar_df, panos_path):
             if id != -1:
                 print(sign, id)
                 print(pois)
-                add_images(pois, panos_path, 0)
-                tsign_coords = compute_coords(pois, tsign_df)
-                tsign_df.loc[len(tsign_df.index)] = [sign, '{}_{}'.format(sign, id), Point(tsign_coords)]
+                try:
+                    sfm(sign, id,  pois, trajectory_df, panos_path, tsign_df, buffer=0)
+                except ValueError:
+                    continue
                 print(tsign_df)
 
-        
+    return tsign_df
+
+def sfm(sign, id, pois, trajectory_df, panos_path, tsign_df, buffer):
+    try:
+        add_images(pois, panos_path, buffer)
+        tsign_coords = compute_coords(pois, trajectory_df)
+        tsign_df.loc[len(tsign_df.index)] = [sign, '{}_{}'.format(sign, id), Point(tsign_coords)]
+    except KeyError as e:
+        print("{}: Failed matching, reconstruction will start again.".format(e))
+        buffer +=1
+        sfm(sign, id, pois, trajectory_df, panos_path, tsign_df, buffer)
+
 
 def cluster_dbscan(group):
     coords = np.vstack(zip(group['latitude[deg]'], group['longitude[deg]']))
@@ -263,9 +273,6 @@ def get_intersection(group_gdf):
     group_gdf.drop(columns=['lon_2', 'lat_2'], inplace=True)
                                
 
-
-
-
 def cluster_by_intersection(idxs, intersections):
     split_indices = np.where(~intersections)[0] +1
     return np.split(idxs, split_indices)
@@ -291,7 +298,11 @@ def plot_situation(sign, group):
     plt.axis('equal')
     cx.add_basemap(ax, crs=group.crs)
     plt.title('{}, {}'.format(sign, np.unique(group['labels'])))
-    
+
+
+def save_shp(df, shp_path):
+    gdf = gpd.GeoDataFrame(df, geometry=df['geometry'], crs = 4326)
+    gdf.to_file(shp_path)
 
 
 def main():
@@ -300,8 +311,12 @@ def main():
     parser.add_argument('trajektorie', help='Cesta k csv souboru s trajektorií snímání')
     parser.add_argument('fotky', help='Cesta ke složce s panoramatickými snímky')
     args = parser.parse_args()
-    df = ximilar_to_df(args.ximilar, args.fotky)
-    find_pois(df, args.trajektorie)
+
+    ximilar_df = ximilar_to_df(args.ximilar, args.fotky)
+    trajectory_df = pd.read_csv(args.trajektorie, delimiter=';')
+    tsign_df = find_pois(ximilar_df, trajectory_df, args.fotky)
+    save_shp(tsign_df, 'test_full.shp')
+
 
     
 
