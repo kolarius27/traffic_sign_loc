@@ -3,14 +3,11 @@
 
 import subprocess
 import argparse
-import numpy as np
 import json
 import time
 from os.path import join, isfile
 import csv
-from sklearn.cluster import DBSCAN
 import matplotlib.pyplot as plt
-import geopandas as gpd
 import contextily as cx
 
 from utils import *
@@ -28,11 +25,15 @@ dataset_path = r'C:\Users\micha\Desktop\Gekon\znacky\OpenSfM\data\test_pano4'
 clean_folder(dataset_path)
 
 
-def prepare_exif_file(trajectory_df, dataset_path):
-    #print(df)
+def prepare_exif_file(
+        trajectory_df: pd.DataFrame, 
+        dataset_path: str
+        ) -> None:
+    """Convert trajectory csv into json with EXIF info of images"""
     json_data = {}
 
-    for index, row in trajectory_df.iterrows():
+    # iterate through rows of trajectory DataFrame and add it into json
+    for _, row in trajectory_df.iterrows():
         panorama_name = row['panorama_file_name'] + '.jpg'
         latitude = row['latitude[deg]']
         longitude = row['longitude[deg]']
@@ -55,39 +56,34 @@ def prepare_exif_file(trajectory_df, dataset_path):
         json.dump(json_data, json_file, indent=4)
 
 
-def add_images(pois, panos_path, buffer):
+def add_images(
+        pois: gpd.GeoDataFrame,
+        panos_path: str,
+        buffer: int
+        ) -> None:
+    """Find images and copy them into temp folder."""
+    # Create images folder in the temp folder
     images_folder = os.path.join(dataset_path, 'images')
     if not os.path.exists(images_folder):
         os.mkdir(images_folder)
 
+    # Array of panoramic images with observations
     images = np.array([os.path.join(panos_path, file + '.jpg') for file in pois['panorama_file_name']])
-    #print(images)
 
+    # Array of all images from folder with panoramic images
     pano_files = np.array(list_files(panos_path, '.jpg'))
-    #print(pano_files)
+
+    # get indexes from array of all images of images with observations
     idx = np.where(np.isin(pano_files, images))[0]
     
+    # get range of indexes with images for reconstruction
     id_range = get_image_range(idx, buffer, len(pano_files))
     print(id_range)
 
+    # copy those images into temp folder
     for id in id_range:
         file_path = pano_files[id]
         shutil.copyfile(file_path, os.path.join(images_folder, os.path.split(file_path)[-1]))
-
-
-def get_image_range(idx, buffer, list_len):
-    min_img_code = min(idx)
-    max_img_code = max(idx)
-    if min_img_code >= buffer:
-        if (list_len - max_img_code) >= buffer:
-            return range(min_img_code - buffer, max_img_code + buffer + 1, 1)
-        elif (list_len - max_img_code) < buffer:
-            return range(min_img_code - buffer, max_img_code + 1, 1)
-    elif min_img_code < buffer:
-        if (list_len - max_img_code) >= buffer:
-            return range(min_img_code, max_img_code + buffer + 1, 1)
-        elif (list_len - max_img_code) < buffer:
-            return range(min_img_code, max_img_code + 1, 1)
 
 
 def compute_coords(pois, trajectory_df):
@@ -97,11 +93,7 @@ def compute_coords(pois, trajectory_df):
 
     # paths to bat files with opensfm steps
     bat_prepare = os.path.join(opensfm_path, 'bin\opensfm_prepare.bat')
-    bat_reconstruct = os.path.join(opensfm_path, 'bin\opensfm_reconstruct.bat')
-    
-    # prepare list of images
-    img_path = os.path.join(dataset_path, 'images')
-    img_files = [f for f in os.listdir(img_path) if isfile(join(img_path, f))]
+    bat_reconstruct = os.path.join(opensfm_path, 'bin\opensfm_reconstruct.bat') 
     
     # run preparation of tracks
     subprocess.run([bat_prepare, dataset_path])
@@ -130,9 +122,19 @@ def compute_coords(pois, trajectory_df):
     return tsign_coords
 
 
-def ximilar_to_df(ximilar_path, panos_path):
+def ximilar_to_df(
+        ximilar_path: str, 
+        panos_path: str
+        ) -> pd.DataFrame:
     """
     Converting info from ximilar txts into df
+
+    Args:
+        ximilar_path: a path to a folder with ximilar observation txts,
+        panos_path: a path to panoramic images
+
+    Returns: 
+        pd.Dataframe of observations linked to panoramic images
     """
     # List to store extracted data
     data = []
@@ -142,14 +144,18 @@ def ximilar_to_df(ximilar_path, panos_path):
         if filename.endswith(".txt"):
             file_path = os.path.join(ximilar_path, filename)
             codes = filename[:-4].split('_')
+            # convert a txt observation into a row in the Dataframe
             with open(file_path, "r") as file:
                 try:
+                    # load txt as a json
                     json_lines = [remove_comments(line) for line in file.readlines()]
                     json_str = "\n".join(json_lines)
                     json_data = json.loads(json_str)
 
+                    # convert cube image coordinates into equirectangular image coordinates
                     x, y = map_cube(json_data["points"][0]["point"][0], json_data["points"][0]["point"][1], codes[-2])
 
+                    # save all relevant info into a dict
                     extracted_info = {
                         "filename": filename[:-4],
                         "panorama_file_name": codes[-3],
@@ -165,90 +171,134 @@ def ximilar_to_df(ximilar_path, panos_path):
     # Create a DataFrame from the extracted data
     df = pd.DataFrame(data)
     
-    # Edit the dataframe
+    # Search for panoramic images
     pano_files = os.listdir(panos_path)
 
+    # Switch names of split panorama to full panorama
     filename_dict = {file_name[-7:-4]: file_name[:-4] for file_name in pano_files}
     df['panorama_file_name'] = df['panorama_file_name'].map(filename_dict.get)
 
     return df
 
 
-def find_pois(ximilar_df, trajectory_df, panos_path):
-    # 
-    tsign_df = pd.DataFrame(columns = ['kod', 'pois', 'geometry'])
+def find_pois(
+        ximilar_df: pd.DataFrame,
+        trajectory_df: pd.DataFrame,
+        panos_path: str,
+        plot_arg: bool
+        ) -> pd.DataFrame:
+    """
+    Hello World
 
+    Args:
+        ximilar_df: Dataframe of ximilar observations,
+        trajectory_df: Dataframe with trajectory,
+        panos_path: A path to panoramic images,
+        plot_arg: Boolean value, if true, plot situation
+
+    Returns:
+        pd.DataFrame with traffic signs, pd.DataFrame with failed geolocation
+    """
+    # initialization of dataframes
+    tsign_df = pd.DataFrame(columns = ['kod', 'pois', 'geometry'])
+    failed_df = pd.DataFrame()
+
+    # merge ximilar dataframe and trajectory dataframe
     merged_df = pd.merge(ximilar_df, trajectory_df, on='panorama_file_name', how='inner')
     merged_df.drop(columns=['filename', 'gps_seconds[s]'], inplace=True)
+
+    # convert Dataframe into GeoDataFrame
     geometry = [Point(xy) for xy in zip(merged_df['longitude[deg]'], merged_df['latitude[deg]'])] 
     gdf = gpd.GeoDataFrame(merged_df, geometry=geometry, crs=4326)
+
+    # Pre-cluster GeoDataFrame by traffic sign type
     grouped_gdf = gdf.groupby('traffic_sign')
     for sign, group in grouped_gdf:
-        #print(sign)
+        print(group)
+        # Pre-cluster via DBSCAN
         cluster_dbscan(group)
+        # Add direction vectors for every observation
         add_directions(group)
-        get_intersection(group)
-        #plot_situation(sign, group)
-        group.drop(columns=['latitude[deg]', 'longitude[deg]', 'altitude_ellipsoidal[m]', 'geometry'], inplace=True)
+        # Check if direction vectors intersect between each other and finish clustering
+        failed_idx = get_intersection(group)
+        failed_obs = group[group.index.isin(failed_idx)]
+        print(failed_obs)
+        failed_df = pd.concat([failed_df, failed_obs])
+        # Create final clusters with observations of one traffic sign
         pois_gdf = group.groupby('labels')
+        # iterate through clusters
         for id, pois in pois_gdf:
             if id != -1:
                 print(sign, id)
                 print(pois)
-                try:
-                    sfm(sign, id,  pois, trajectory_df, panos_path, tsign_df, buffer=0)
-                except ValueError:
-                    continue
+                # Plotting the situation
+                if plot_arg is True:
+                    plot_situation(sign, pois)
+                # Drop columns
+                pois.drop(columns=['latitude[deg]', 'longitude[deg]', 'lon_2', 'lat_2', 'altitude_ellipsoidal[m]', 'geometry'], inplace=True)
+                # SFM framework
+                sfm(sign, id,  pois, trajectory_df, panos_path, tsign_df, buffer=0)
                 print(tsign_df)
-
-    return tsign_df
-
-def sfm(sign, id, pois, trajectory_df, panos_path, tsign_df, buffer):
-    try:
-        add_images(pois, panos_path, buffer)
-        tsign_coords = compute_coords(pois, trajectory_df)
-        tsign_df.loc[len(tsign_df.index)] = [sign, '{}_{}'.format(sign, id), Point(tsign_coords)]
-    except KeyError as e:
-        print("{}: Failed matching, reconstruction will start again.".format(e))
-        buffer +=1
-        sfm(sign, id, pois, trajectory_df, panos_path, tsign_df, buffer)
+    return tsign_df, failed_df
 
 
-def cluster_dbscan(group):
-    coords = np.vstack(zip(group['latitude[deg]'], group['longitude[deg]']))
-    # print(coords)
-    clusterer = DBSCAN(eps=0.1/6371., min_samples = 2, algorithm='ball_tree', metric='haversine').fit(np.radians(coords))
-    group['labels'] = clusterer.labels_
+def sfm(
+        sign: str,
+        id: int,
+        pois: gpd.GeoDataFrame,
+        trajectory_df: pd.DataFrame,
+        panos_path: str,
+        tsign_df: pd.DataFrame,
+        buffer: int
+        ) -> None:
+    """
+    SFM framework using OpenSfM library. 
+    """
+    # Copy images and into temp file and create exif_override.json
+    add_images(pois, panos_path, buffer)
+
+    # Compute WGS-84 coordinates of the traffic sign
+    tsign_coords = compute_coords(pois, trajectory_df)
+
+    # Add new line into final GeoDataFrame
+    tsign_df.loc[len(tsign_df.index)] = [sign, '{}_{}'.format(sign, id), Point(tsign_coords)]
 
 
-def add_directions(group):
+def add_directions(
+        group: gpd.GeoDataFrame
+        ) -> None:
+    """Add directions of observations into pre-clustered geodataframes"""
     gdf_copy = group.copy()
     lon_2 = []
     lat_2 = []
     for _, row in gdf_copy.iterrows():
-        #print(i)
+        # rectify panoramic image and calculate second point of direction vector
         arr = rectification(row)
-        lon_2.append(row['longitude[deg]'] + arr[0]/1000)
-        lat_2.append(row['latitude[deg]'] + arr[1]/1000)
+        lon_2.append(row['longitude[deg]'] + arr[0]/500)
+        lat_2.append(row['latitude[deg]'] + arr[1]/500)
     group['lon_2'] = lon_2
     group['lat_2'] = lat_2
 
+    # drop columns
     group.drop(columns=['roll[deg]', 'pitch[deg]', 'heading[deg]'], inplace=True)
 
 
-    #g = sns.scatterplot(x='longitude[deg]', y='latitude[deg]', hue='labels', data=group)
-    #plt.show()
-
-
-def get_intersection(group_gdf):
-    #print(group_gdf)
-    cluster_gdf = group_gdf.groupby('labels')
+def get_intersection(
+        group: gpd.GeoDataFrame
+        ) -> None:
+    """Create LineStrings from direction vectors and check if the LineStrings intersect. Then, split the pre-clusters into final clusters."""
+    # Load pre-clusters
+    cluster_gdf = group.groupby('labels')
     cluster_list = []
-    for sign, cluster in cluster_gdf:
-        #print(sign)        
+
+    # iterate through pre-clusters
+    for _, cluster in cluster_gdf:
+        # get original indexes of clusters
         idxs = cluster.index.tolist()
         intersections = []
+        # check intersection of subsequent observations, if observations intersect, return True 
         for i in range(len(idxs) - 1):
+
             id1 = idxs[i]
             id2 = idxs[i+1]
             row1 = cluster.loc[id1]
@@ -256,75 +306,96 @@ def get_intersection(group_gdf):
             line1 = create_linestring(row1)
             line2 = create_linestring(row2)
             intersection = line1.intersects(line2)
+
+            # if observation is from the same panorama, return False
             if row1['panorama_file_name'] == row2['panorama_file_name']:
                 intersection = False
             intersections.append(intersection)
 
+        # Find subsequent intersectioning observations
         inter_arr = np.array(intersections)
-        # print(inter_arr)
         cluster_list.extend(cluster_by_intersection(idxs, inter_arr))
-    #print(cluster_list)
-    cluster_ids = get_cluster_ids(cluster_list)
-    #print(cluster_ids)
-    #print(group_gdf['labels'])
-    group_gdf['labels'] = cluster_ids
-    #print(group_gdf['labels'])
 
-    group_gdf.drop(columns=['lon_2', 'lat_2'], inplace=True)
+    # prepare cluster ids and save them to the 'labels' column
+    cluster_ids, failed_ids = get_cluster_ids(cluster_list)
+    print('cluster ids', cluster_ids)
+    print('failed ids', failed_ids)
+    group['labels'] = cluster_ids
+    return failed_ids
                                
 
-def cluster_by_intersection(idxs, intersections):
-    split_indices = np.where(~intersections)[0] +1
-    return np.split(idxs, split_indices)
+def cluster_by_intersection(
+        idxs: np.array, 
+        intersections: np.array
+        ) -> np.array:
+    """Find borders between clusters"""   
+    try:
+        split_indices = np.where(~intersections)[0] +1
+        return np.split(idxs, split_indices)
+    except TypeError:
+        return idxs
     
 
-def get_cluster_ids(cluster_list):
+def get_cluster_ids(
+        cluster_list: list
+        ) -> np.array:
+    """Prepare ids of clusters"""
+    print(cluster_list)
     cluster_ids = []
+    failed_ids = []
     valid_clusters = 0
-    for cluster in cluster_list:
-        if len(cluster) > 1:
+    for cluster in cluster_list:   
+        if type(cluster) is int:
+            cluster_ids.append(-1)
+            failed_ids.append(cluster)
+        elif len(cluster) > 1 :
             cluster_ids.extend([valid_clusters] * len(cluster))
             valid_clusters += 1
         else:
             cluster_ids.append(-1)
-    return np.array(cluster_ids)
+            failed_ids.append(cluster[0])
+    return np.array(cluster_ids), np.array(failed_ids)
 
 
-def plot_situation(sign, group):
+def plot_situation(
+        sign: str,
+        group: gpd.GeoDataFrame
+        ) -> None:
+    """Plotting the situation"""
     ax = group.plot(column='labels', figsize=(10,10), colormap='viridis')
     for row in zip(group['longitude[deg]'], group['latitude[deg]'], group['lon_2'], group['lat_2']):
-        # plt.axline(row[:2], slope=np.tan(row[4]), c='blue')
         plt.axline(row[:2], row[2:4], c='red')
     plt.axis('equal')
     cx.add_basemap(ax, crs=group.crs)
     plt.title('{}, {}'.format(sign, np.unique(group['labels'])))
-
-
-def save_shp(df, shp_path):
-    gdf = gpd.GeoDataFrame(df, geometry=df['geometry'], crs = 4326)
-    gdf.to_file(shp_path)
+    plt.show()
 
 
 def main():
+    # Get arguments
     parser = argparse.ArgumentParser(prog='PanoLoc', description='Aplikace na výpočet geolokace z panoramatických snímků')
     parser.add_argument('ximilar', help='Cesta ke složce, kde jsou uložené txt soubory od Ximilaru')
     parser.add_argument('trajektorie', help='Cesta k csv souboru s trajektorií snímání')
     parser.add_argument('fotky', help='Cesta ke složce s panoramatickými snímky')
+    parser.add_argument('-p', '--plot', help='Grafické znázornění situace', action='store_true')
     args = parser.parse_args()
 
+    # Convert ximilar observations to pandas dataframe
     ximilar_df = ximilar_to_df(args.ximilar, args.fotky)
+    # Read trajectory csv
     trajectory_df = pd.read_csv(args.trajektorie, delimiter=';')
-    tsign_df = find_pois(ximilar_df, trajectory_df, args.fotky)
+    # Main pipeline
+    tsign_df, failed_df = find_pois(ximilar_df, trajectory_df, args.fotky, args.plot)
+    # Save DataFrame as a shapefile
     save_shp(tsign_df, 'test_full.shp')
+    failed_df.to_csv('failed.csv')
 
 
     
 
 if __name__ == '__main__':
     start = time.time()
-
     main()
-
     end = time.time()
     runtime = end - start
     print('Runtime: ', runtime)

@@ -1,0 +1,2 @@
+,panorama_file_name,x,y,traffic_sign,latitude[deg],longitude[deg],altitude_ellipsoidal[m],geometry,labels,lon_2,lat_2
+2,pano_0000_000347,369,2223,"IP22, E7b",50.0810040192866,14.6171959074278,286.790563074872,POINT (14.6171959074278 50.0810040192866),-1,14.615480943943377,50.08197807126512
